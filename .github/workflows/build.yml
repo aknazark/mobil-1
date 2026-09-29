@@ -1,0 +1,399 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+      - name: Generate project files
+        run: |
+          set -e
+          mkdir -p "$(dirname 'app/build.gradle.kts')"
+          cat > 'app/build.gradle.kts' <<'EOF_FILE'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+              id("org.jetbrains.kotlin.plugin.compose")
+              id("org.jetbrains.kotlin.plugin.parcelize")
+          }
+
+          android {
+              namespace = "com.example.twoscreensapp"
+              compileSdk = 35
+
+              defaultConfig {
+                  applicationId = "com.example.twoscreensapp"
+                  minSdk = 24
+                  targetSdk = 35
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              buildFeatures { compose = true }
+          }
+
+          // Один и тот же JVM target для Java и Kotlin
+          kotlin { jvmToolchain(17) }
+
+          dependencies {
+              implementation(platform("androidx.compose:compose-bom:2024.09.00"))
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.activity:activity-compose:1.9.2")
+              implementation("androidx.core:core-ktx:1.13.1")
+          }
+          EOF_FILE
+          mkdir -p "$(dirname 'app/src/main/AndroidManifest.xml')"
+          cat > 'app/src/main/AndroidManifest.xml' <<'EOF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="true"
+                  android:label="@string/app_name"
+                  android:theme="@style/Theme.TwoScreensApp">
+                  <activity
+                      android:name=".SecondActivity"
+                      android:exported="false"
+                      android:parentActivityName=".MainActivity" />
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF_FILE
+          mkdir -p "$(dirname 'app/src/main/java/com/example/twoscreensapp/Keys.kt')"
+          cat > 'app/src/main/java/com/example/twoscreensapp/Keys.kt' <<'EOF_FILE'
+          package com.example.twoscreensapp
+
+          object Keys {
+              const val MESSAGE = "user_message"
+              const val REPLY = "reply_message"
+              const val USER = "user"
+          }
+          EOF_FILE
+          mkdir -p "$(dirname 'app/src/main/java/com/example/twoscreensapp/MainActivity.kt')"
+          cat > 'app/src/main/java/com/example/twoscreensapp/MainActivity.kt' <<'EOF_FILE'
+          package com.example.twoscreensapp
+
+          import android.content.Intent
+          import android.os.Bundle
+          import android.widget.Toast
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+          import androidx.activity.result.ActivityResultLauncher
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.compose.foundation.layout.Arrangement
+          import androidx.compose.foundation.layout.Column
+          import androidx.compose.foundation.layout.Spacer
+          import androidx.compose.foundation.layout.fillMaxSize
+          import androidx.compose.foundation.layout.fillMaxWidth
+          import androidx.compose.foundation.layout.height
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.material3.Button
+          import androidx.compose.material3.CenterAlignedTopAppBar
+          import androidx.compose.material3.ExperimentalMaterial3Api
+          import androidx.compose.material3.MaterialTheme
+          import androidx.compose.material3.OutlinedButton
+          import androidx.compose.material3.OutlinedTextField
+          import androidx.compose.material3.Scaffold
+          import androidx.compose.material3.Text
+          import androidx.compose.runtime.Composable
+          import androidx.compose.runtime.getValue
+          import androidx.compose.runtime.mutableStateOf
+          import androidx.compose.runtime.saveable.rememberSaveable
+          import androidx.compose.runtime.setValue
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.res.stringResource
+          import androidx.compose.ui.unit.dp
+
+          class MainActivity : ComponentActivity() {
+
+              private val openForResult: ActivityResultLauncher<Intent> =
+                  registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+                      if (result.resultCode == RESULT_OK) {
+                          val reply = result.data?.getStringExtra(Keys.REPLY)
+                          val text = if (!reply.isNullOrBlank())
+                              getString(R.string.reply_toast, reply)
+                          else
+                              getString(R.string.reply_empty)
+                          Toast.makeText(this, text, Toast.LENGTH_LONG).show()
+                      }
+                  }
+
+              private fun buildIntent(message: String): Intent =
+                  Intent(this, SecondActivity::class.java)
+                      .putExtra(Keys.MESSAGE, message)
+                      .putExtra(Keys.USER, User("Student", 20))
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContent {
+                      MaterialTheme {
+                          FirstScreen(
+                              onSend = { startActivity(buildIntent(it)) },
+                              onSendForResult = { openForResult.launch(buildIntent(it)) }
+                          )
+                      }
+                  }
+              }
+          }
+
+          @OptIn(ExperimentalMaterial3Api::class)
+          @Composable
+          fun FirstScreen(
+              onSend: (String) -> Unit,
+              onSendForResult: (String) -> Unit
+          ) {
+              var text by rememberSaveable { mutableStateOf("") }
+              val isValid = text.isNotBlank()
+
+              Scaffold(
+                  topBar = { CenterAlignedTopAppBar(title = { Text(stringResource(R.string.screen1_title)) }) }
+              ) { inner ->
+                  Column(
+                      modifier = Modifier
+                          .padding(inner)
+                          .padding(16.dp)
+                          .fillMaxSize(),
+                      horizontalAlignment = Alignment.CenterHorizontally,
+                      verticalArrangement = Arrangement.Center
+                  ) {
+                      OutlinedTextField(
+                          value = text,
+                          onValueChange = { text = it },
+                          label = { Text(stringResource(R.string.enter_message)) },
+                          singleLine = true,
+                          modifier = Modifier.fillMaxWidth()
+                      )
+                      Spacer(Modifier.height(16.dp))
+                      Button(
+                          onClick = { onSend(text) },
+                          enabled = isValid,
+                          modifier = Modifier.fillMaxWidth()
+                      ) { Text(stringResource(R.string.open_second)) }
+                      Spacer(Modifier.height(8.dp))
+                      OutlinedButton(
+                          onClick = { onSendForResult(text) },
+                          enabled = isValid,
+                          modifier = Modifier.fillMaxWidth()
+                      ) { Text(stringResource(R.string.open_for_result)) }
+                  }
+              }
+          }
+          EOF_FILE
+          mkdir -p "$(dirname 'app/src/main/java/com/example/twoscreensapp/SecondActivity.kt')"
+          cat > 'app/src/main/java/com/example/twoscreensapp/SecondActivity.kt' <<'EOF_FILE'
+          package com.example.twoscreensapp
+
+          import android.content.Intent
+          import android.os.Bundle
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+          import androidx.compose.foundation.layout.Arrangement
+          import androidx.compose.foundation.layout.Column
+          import androidx.compose.foundation.layout.Spacer
+          import androidx.compose.foundation.layout.fillMaxSize
+          import androidx.compose.foundation.layout.fillMaxWidth
+          import androidx.compose.foundation.layout.height
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.material3.Button
+          import androidx.compose.material3.CenterAlignedTopAppBar
+          import androidx.compose.material3.ExperimentalMaterial3Api
+          import androidx.compose.material3.MaterialTheme
+          import androidx.compose.material3.OutlinedButton
+          import androidx.compose.material3.OutlinedTextField
+          import androidx.compose.material3.Scaffold
+          import androidx.compose.material3.Text
+          import androidx.compose.runtime.Composable
+          import androidx.compose.runtime.getValue
+          import androidx.compose.runtime.mutableStateOf
+          import androidx.compose.runtime.saveable.rememberSaveable
+          import androidx.compose.runtime.setValue
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.res.stringResource
+          import androidx.compose.ui.unit.dp
+          import androidx.core.content.IntentCompat
+
+          class SecondActivity : ComponentActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  val incoming = intent.getStringExtra(Keys.MESSAGE) ?: getString(R.string.no_data)
+                  val user = IntentCompat.getParcelableExtra(intent, Keys.USER, User::class.java)
+
+                  setContent {
+                      MaterialTheme {
+                          SecondScreen(
+                              incomingMessage = incoming,
+                              user = user,
+                              onBack = { finish() },
+                              onReturnResult = { reply ->
+                                  setResult(RESULT_OK, Intent().putExtra(Keys.REPLY, reply))
+                                  finish()
+                              }
+                          )
+                      }
+                  }
+              }
+          }
+
+          @OptIn(ExperimentalMaterial3Api::class)
+          @Composable
+          fun SecondScreen(
+              incomingMessage: String,
+              user: User?,
+              onBack: () -> Unit,
+              onReturnResult: (String) -> Unit
+          ) {
+              var reply by rememberSaveable { mutableStateOf("") }
+
+              Scaffold(
+                  topBar = { CenterAlignedTopAppBar(title = { Text(stringResource(R.string.screen2_title)) }) }
+              ) { inner ->
+                  Column(
+                      modifier = Modifier
+                          .padding(inner)
+                          .padding(16.dp)
+                          .fillMaxSize(),
+                      horizontalAlignment = Alignment.CenterHorizontally,
+                      verticalArrangement = Arrangement.Center
+                  ) {
+                      Text(stringResource(R.string.incoming_label))
+                      Spacer(Modifier.height(8.dp))
+                      Text(text = incomingMessage, style = MaterialTheme.typography.headlineSmall)
+                      if (user != null) {
+                          Spacer(Modifier.height(8.dp))
+                          Text(stringResource(R.string.user_info, user.name, user.age))
+                      }
+                      Spacer(Modifier.height(24.dp))
+                      OutlinedTextField(
+                          value = reply,
+                          onValueChange = { reply = it },
+                          label = { Text(stringResource(R.string.your_reply)) },
+                          singleLine = true,
+                          modifier = Modifier.fillMaxWidth()
+                      )
+                      Spacer(Modifier.height(16.dp))
+                      Button(
+                          onClick = { onReturnResult(reply) },
+                          enabled = reply.isNotBlank(),
+                          modifier = Modifier.fillMaxWidth()
+                      ) { Text(stringResource(R.string.send_and_close)) }
+                      Spacer(Modifier.height(8.dp))
+                      OutlinedButton(
+                          onClick = onBack,
+                          modifier = Modifier.fillMaxWidth()
+                      ) { Text(stringResource(R.string.back_without_reply)) }
+                  }
+              }
+          }
+          EOF_FILE
+          mkdir -p "$(dirname 'app/src/main/java/com/example/twoscreensapp/User.kt')"
+          cat > 'app/src/main/java/com/example/twoscreensapp/User.kt' <<'EOF_FILE'
+          package com.example.twoscreensapp
+
+          import android.os.Parcelable
+          import kotlinx.parcelize.Parcelize
+
+          @Parcelize
+          data class User(val name: String, val age: Int) : Parcelable
+          EOF_FILE
+          mkdir -p "$(dirname 'app/src/main/res/values-kk/strings.xml')"
+          cat > 'app/src/main/res/values-kk/strings.xml' <<'EOF_FILE'
+          <resources>
+              <string name="app_name">TwoScreensApp</string>
+              <string name="screen1_title">1-экран — хабар енгізу</string>
+              <string name="enter_message">Хабар енгізіңіз</string>
+              <string name="open_second">Екінші экранды ашу (жіберу)</string>
+              <string name="open_for_result">Нәтиже үшін ашу</string>
+              <string name="screen2_title">2-экран — қабылданды</string>
+              <string name="incoming_label">Алғашқы экраннан келген хабар:</string>
+              <string name="no_data">Деректер жоқ</string>
+              <string name="user_info">Пайдаланушы: %1$s, %2$d жас</string>
+              <string name="your_reply">Сіздің жауабыңыз</string>
+              <string name="send_and_close">Жауапты жіберу және жабу</string>
+              <string name="back_without_reply">Жауапсыз қайту</string>
+              <string name="reply_toast">Жауап: %1$s</string>
+              <string name="reply_empty">Жауап бос</string>
+          </resources>
+          EOF_FILE
+          mkdir -p "$(dirname 'app/src/main/res/values/strings.xml')"
+          cat > 'app/src/main/res/values/strings.xml' <<'EOF_FILE'
+          <resources>
+              <string name="app_name">TwoScreensApp</string>
+              <string name="screen1_title">Экран 1 — ввод сообщения</string>
+              <string name="enter_message">Введите сообщение</string>
+              <string name="open_second">Открыть второй экран (передать)</string>
+              <string name="open_for_result">Открыть для результата</string>
+              <string name="screen2_title">Экран 2 — получено</string>
+              <string name="incoming_label">Сообщение с первого экрана:</string>
+              <string name="no_data">Нет данных</string>
+              <string name="user_info">Пользователь: %1$s, %2$d лет</string>
+              <string name="your_reply">Ваш ответ</string>
+              <string name="send_and_close">Отправить ответ и закрыть</string>
+              <string name="back_without_reply">Назад без ответа</string>
+              <string name="reply_toast">Ответ: %1$s</string>
+              <string name="reply_empty">Ответ пустой</string>
+          </resources>
+          EOF_FILE
+          mkdir -p "$(dirname 'app/src/main/res/values/themes.xml')"
+          cat > 'app/src/main/res/values/themes.xml' <<'EOF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.TwoScreensApp" parent="android:Theme.Material.Light.NoActionBar" />
+          </resources>
+          EOF_FILE
+          mkdir -p "$(dirname 'build.gradle.kts')"
+          cat > 'build.gradle.kts' <<'EOF_FILE'
+          plugins {
+              id("com.android.application") version "8.6.1" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.20" apply false
+              id("org.jetbrains.kotlin.plugin.compose") version "2.0.20" apply false
+              id("org.jetbrains.kotlin.plugin.parcelize") version "2.0.20" apply false
+          }
+          EOF_FILE
+          mkdir -p "$(dirname 'gradle.properties')"
+          cat > 'gradle.properties' <<'EOF_FILE'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          android.nonTransitiveRClass=true
+          EOF_FILE
+          mkdir -p "$(dirname 'settings.gradle.kts')"
+          cat > 'settings.gradle.kts' <<'EOF_FILE'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "TwoScreensApp"
+          include(":app")
+          EOF_FILE
+      - name: Build debug APK
+        run: gradle assembleDebug --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TwoScreensApp-debug
+          path: app/build/outputs/apk/debug/*.apk
